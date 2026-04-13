@@ -29,3 +29,34 @@ func TestFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestParse(t *testing.T) {
+	tests := []struct {
+		in   string
+		want time.Duration
+	}{
+		{"0", 0},
+		{"2", 2 * time.Second},
+		{"1.5", 1500 * time.Millisecond},
+		{"500ms", 500 * time.Millisecond},
+		{"1s", time.Second},
+		{"30s", 30 * time.Second},
+		{"1.5m", 90 * time.Second},
+		{"1h30m", 90 * time.Minute},
+		{"7d", 7 * 24 * time.Hour},
+		{"2w", 14 * 24 * time.Hour},
+		{"1d12h", 36 * time.Hour},
+	}
+	for _, tt := range tests {
+		got, err := Parse(tt.in)
+		if err != nil || got != tt.want {
+			t.Errorf("Parse(%q) = %v, %v; want %v", tt.in, got, err, tt.want)
+		}
+	}
+
+	for _, bad := range []string{"", "s", "-1s", "1x", "1 s", "1.s", "inf", "1e3s", "10000000w"} {
+		if got, err := Parse(bad); err == nil {
+			t.Errorf("Parse(%q) = %v, want error", bad, got)
+		}
+	}
+}

@@ -22,6 +22,7 @@ Usage:
   cmdtime <command> [flags]
 
 Commands:
+  init      print the shell hook (eval "$(cmdtime init zsh)")
   record    store one finished command (used by the shell hooks)
   run       run a command and record how long it took
   recent    show the most recent runs
@@ -32,6 +33,7 @@ Run "cmdtime <command> -h" for the flags of each command.
 Environment:
   CMDTIME_DB   database path (default $XDG_DATA_HOME/cmdtime/cmdtime.db,
                or ~/.local/share/cmdtime/cmdtime.db)
+  CMDTIME_MIN  shortest command the shell hook records (default 1s)
 `
 
 type app struct {
@@ -46,6 +48,7 @@ type command struct {
 }
 
 var commands = map[string]command{
+	"init":   {initUsage, (*app).cmdInit},
 	"record": {recordUsage, (*app).cmdRecord},
 	"run":    {runUsage, (*app).cmdRun},
 	"recent": {recentUsage, (*app).cmdRecent},
@@ -142,6 +145,27 @@ func parseFlags(fs *flag.FlagSet, args []string) error {
 		return usageError{err.Error()}
 	}
 	return nil
+}
+
+// parseArgs is parseFlags for commands that take positional arguments. Flags
+// may come before or after them, as in: stats "make build" --since 7d.
+// Everything after "--" is positional.
+func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
+	var pos []string
+	for {
+		if err := parseFlags(fs, args); err != nil {
+			return nil, err
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return pos, nil
+		}
+		if n := len(args) - len(rest); n > 0 && args[n-1] == "--" {
+			return append(pos, rest...), nil
+		}
+		pos = append(pos, rest[0])
+		args = rest[1:]
+	}
 }
 
 func openStore() (*store.Store, error) {

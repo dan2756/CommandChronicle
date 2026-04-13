@@ -11,6 +11,28 @@ keeps a record of every run so you can find out.
 go install github.com/dan2756/cmdtime@latest
 ```
 
+## Shell setup
+
+Load the hook in your shell's startup file and every interactive command
+that takes a second or more is recorded:
+
+```sh
+# ~/.zshrc
+eval "$(cmdtime init zsh)"
+
+# ~/.bashrc (put it at the end, after other prompt tools)
+eval "$(cmdtime init bash)"
+```
+
+Records are written by a background process, so the prompt is never kept
+waiting. Commands faster than the threshold (`ls`, `cd`, ...) are filtered
+inside the shell and cost nothing. Change the threshold with `--min` or
+`CMDTIME_MIN`:
+
+```sh
+eval "$(cmdtime init zsh --min 3s)"
+```
+
 ## Usage
 
 Wrap a command to time and record it:

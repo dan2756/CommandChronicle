@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dan2756/cmdtime/internal/dur"
 	"github.com/dan2756/cmdtime/internal/store"
 )
 
@@ -27,6 +28,7 @@ Flags:
   --end int       end time in unix milliseconds (default: now)
   --exit int      exit status of the command (default 0)
   --cwd string    directory the command ran in (default: current directory)
+  --min duration  skip the run if it took less than this, e.g. 2s
 `
 
 func (a *app) cmdRecord(args []string) error {
@@ -36,6 +38,7 @@ func (a *app) cmdRecord(args []string) error {
 	end := fs.Int64("end", 0, "")
 	exit := fs.Int("exit", 0, "")
 	cwd := fs.String("cwd", "", "")
+	minDur := fs.String("min", "0", "")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -58,6 +61,10 @@ func (a *app) cmdRecord(args []string) error {
 	if endMS < *start {
 		return usagef("--end %d is before --start %d", endMS, *start)
 	}
+	threshold, err := dur.Parse(*minDur)
+	if err != nil {
+		return usagef("--min: %v", err)
+	}
 
 	run := store.Run{
 		Cmd:      *cmd,
@@ -65,6 +72,9 @@ func (a *app) cmdRecord(args []string) error {
 		Duration: time.Duration(endMS-*start) * time.Millisecond,
 		Exit:     *exit,
 		Cwd:      *cwd,
+	}
+	if run.Duration < threshold {
+		return nil
 	}
 	if run.Cwd == "" {
 		run.Cwd, _ = os.Getwd()
