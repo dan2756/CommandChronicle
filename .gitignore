@@ -1,0 +1,4 @@
+/cmdtime
+*.db
+*.db-shm
+*.db-wal
