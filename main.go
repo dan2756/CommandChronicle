@@ -26,6 +26,8 @@ Commands:
   record    store one finished command (used by the shell hooks)
   run       run a command and record how long it took
   recent    show the most recent runs
+  top       show the slowest commands
+  stats     summarize one command: percentiles, failures, trend
   version   print the version
 
 Run "cmdtime <command> -h" for the flags of each command.
@@ -52,6 +54,8 @@ var commands = map[string]command{
 	"record": {recordUsage, (*app).cmdRecord},
 	"run":    {runUsage, (*app).cmdRun},
 	"recent": {recentUsage, (*app).cmdRecent},
+	"top":    {topUsage, (*app).cmdTop},
+	"stats":  {statsUsage, (*app).cmdStats},
 }
 
 func main() {

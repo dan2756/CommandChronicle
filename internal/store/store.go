@@ -157,13 +157,27 @@ func (s *Store) Add(ctx context.Context, r Run) (int64, error) {
 
 // Filter selects runs. The zero Filter selects everything.
 type Filter struct {
-	Limit int // at most this many runs; 0 means no limit
+	Key   string    // only runs of this command (compared after keys.Normalize)
+	Since time.Time // only runs started at or after this; zero means no bound
+	Limit int       // at most this many runs; 0 means no limit
 }
 
 // Query returns the runs matching f, newest first.
 func (s *Store) Query(ctx context.Context, f Filter) ([]Run, error) {
 	q := `SELECT id, cmd, started_at, duration_ms, exit_code, cwd FROM runs`
+	var where []string
 	var args []any
+	if f.Key != "" {
+		where = append(where, `key = ?`)
+		args = append(args, keys.Normalize(f.Key))
+	}
+	if !f.Since.IsZero() {
+		where = append(where, `started_at >= ?`)
+		args = append(args, f.Since.UnixMilli())
+	}
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, ` AND `)
+	}
 	q += ` ORDER BY started_at DESC, id DESC`
 	if f.Limit > 0 {
 		q += ` LIMIT ?`

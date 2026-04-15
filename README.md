@@ -56,6 +56,33 @@ STARTED           DURATION  EXIT  DIR       COMMAND
 2026-04-13 19:18  4.8s      1     ~/src/api  go test ./...
 ```
 
+Find the slowest commands of the past week, by 95th percentile:
+
+```sh
+$ cmdtime top
+COMMAND        RUNS  P50    P95    MAX    FAILED
+npm run build  6     1m25s  1m40s  1m42s  17%
+npm install    1     25.0s  25.0s  25.0s  0%
+go test ./...  1     12.0s  12.0s  12.0s  0%
+```
+
+Dig into one command, including how it compares with the period before:
+
+```sh
+$ cmdtime stats "make build"
+make build: 4 runs in the last 30d
+  mean    25.0s
+  p50     25.0s
+  p95     38.5s
+  max     40.0s
+  failed  1 (25%)
+  trend   p50 50% faster than the 30d before (50.0s, 2 runs)
+```
+
+`--group-by word` or `--group-by two-words` lumps related commands
+together: `npm run build` and `npm install` both count as `npm` (or as
+`npm run` and `npm install`).
+
 The database lives at `$XDG_DATA_HOME/cmdtime/cmdtime.db`
 (`~/.local/share/cmdtime/cmdtime.db` by default). Set `CMDTIME_DB` to use
 another file.

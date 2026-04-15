@@ -60,6 +60,39 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestQueryFilters(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	base := time.UnixMilli(1776108000000)
+	for i, cmd := range []string{"make build", "make test", "make  build", "make build"} {
+		r := Run{Cmd: cmd, Start: base.Add(time.Duration(i) * time.Hour), Duration: time.Second}
+		if _, err := s.Add(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name string
+		f    Filter
+		want int
+	}{
+		{"key", Filter{Key: "make build"}, 3},
+		{"key is normalized", Filter{Key: " make   build"}, 3},
+		{"since", Filter{Since: base.Add(2 * time.Hour)}, 2},
+		{"key and since", Filter{Key: "make build", Since: base.Add(time.Hour)}, 2},
+		{"no match", Filter{Key: "make"}, 0},
+	}
+	for _, tt := range tests {
+		runs, err := s.Query(ctx, tt.f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) != tt.want {
+			t.Errorf("%s: got %d runs, want %d", tt.name, len(runs), tt.want)
+		}
+	}
+}
+
 func TestReopenKeepsSchema(t *testing.T) {
 	ctx := context.Background()
 	s, path := openTemp(t)
