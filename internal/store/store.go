@@ -157,28 +157,70 @@ func (s *Store) Add(ctx context.Context, r Run) (int64, error) {
 
 // Filter selects runs. The zero Filter selects everything.
 type Filter struct {
-	Key   string    // only runs of this command (compared after keys.Normalize)
-	Since time.Time // only runs started at or after this; zero means no bound
-	Limit int       // at most this many runs; 0 means no limit
+	Key         string        // only runs of this command (compared after keys.Normalize)
+	Since       time.Time     // only runs started at or after this; zero means no bound
+	Before      time.Time     // only runs started before this; zero means no bound
+	Cwd         string        // only runs in this directory or below it
+	MinDuration time.Duration // only runs that took at least this long
+	Limit       int           // at most this many runs; 0 means no limit
+}
+
+// where returns the SQL condition for f, with its arguments.
+func (f Filter) where() (string, []any) {
+	var conds []string
+	var args []any
+	if f.Key != "" {
+		conds = append(conds, `key = ?`)
+		args = append(args, keys.Normalize(f.Key))
+	}
+	if !f.Since.IsZero() {
+		conds = append(conds, `started_at >= ?`)
+		args = append(args, f.Since.UnixMilli())
+	}
+	if !f.Before.IsZero() {
+		conds = append(conds, `started_at < ?`)
+		args = append(args, f.Before.UnixMilli())
+	}
+	if dir := filepath.Clean(f.Cwd); f.Cwd != "" && dir != "/" {
+		// dir itself, or anything under dir/. '0' sorts right after '/',
+		// so the range covers exactly the paths starting with "dir/"
+		// without LIKE's wildcard escaping.
+		conds = append(conds, `(cwd = ? OR (cwd >= ? AND cwd < ?))`)
+		args = append(args, dir, dir+"/", dir+"0")
+	}
+	if f.MinDuration > 0 {
+		conds = append(conds, `duration_ms >= ?`)
+		args = append(args, f.MinDuration.Milliseconds())
+	}
+	if len(conds) == 0 {
+		return "", nil
+	}
+	return ` WHERE ` + strings.Join(conds, ` AND `), args
+}
+
+// Count returns how many runs match f, ignoring f.Limit.
+func (s *Store) Count(ctx context.Context, f Filter) (int, error) {
+	where, args := f.where()
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM runs`+where, args...).Scan(&n)
+	return n, err
+}
+
+// Prune deletes the runs that started before t and returns how many
+// were deleted.
+func (s *Store) Prune(ctx context.Context, t time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM runs WHERE started_at < ?`, t.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // Query returns the runs matching f, newest first.
 func (s *Store) Query(ctx context.Context, f Filter) ([]Run, error) {
-	q := `SELECT id, cmd, started_at, duration_ms, exit_code, cwd FROM runs`
-	var where []string
-	var args []any
-	if f.Key != "" {
-		where = append(where, `key = ?`)
-		args = append(args, keys.Normalize(f.Key))
-	}
-	if !f.Since.IsZero() {
-		where = append(where, `started_at >= ?`)
-		args = append(args, f.Since.UnixMilli())
-	}
-	if len(where) > 0 {
-		q += ` WHERE ` + strings.Join(where, ` AND `)
-	}
-	q += ` ORDER BY started_at DESC, id DESC`
+	where, args := f.where()
+	q := `SELECT id, cmd, started_at, duration_ms, exit_code, cwd FROM runs` + where +
+		` ORDER BY started_at DESC, id DESC`
 	if f.Limit > 0 {
 		q += ` LIMIT ?`
 		args = append(args, f.Limit)

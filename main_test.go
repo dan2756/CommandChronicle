@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -128,5 +131,132 @@ func TestUsageErrors(t *testing.T) {
 		if code := a.main(args); code != 2 {
 			t.Errorf("%q: exit %d, want 2 (stderr %q)", args, code, stderr)
 		}
+	}
+}
+
+func TestRecentFormats(t *testing.T) {
+	a, stdout, stderr := testApp(t,
+		run("make build", ago(2*time.Hour), 72400*time.Millisecond, 0),
+		run(`echo "a, b"`, ago(time.Hour), 1500*time.Millisecond, 2),
+	)
+
+	if code := a.main([]string{"recent", "--format", "json"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+	}
+	if len(got) != 2 || got[0]["cmd"] != `echo "a, b"` || got[0]["duration_ms"] != 1500.0 ||
+		got[0]["exit"] != 2.0 || got[1]["started_at"] != "2026-04-15T10:00:00.000Z" {
+		t.Errorf("recent --format json = %v", got)
+	}
+	if !strings.HasPrefix(stdout.String(), "[\n  {\n    \"id\": ") {
+		t.Errorf("JSON keys not in column order:\n%s", stdout)
+	}
+
+	stdout.Reset()
+	if code := a.main([]string{"recent", "--format", "csv", "-n", "1"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	recs, err := csv.NewReader(stdout).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"id", "started_at", "duration_ms", "exit", "cwd", "cmd"},
+		{"2", "2026-04-15T11:00:00.000Z", "1500", "2", "/src/app", `echo "a, b"`},
+	}
+	if fmt.Sprint(recs) != fmt.Sprint(want) {
+		t.Errorf("recent --format csv = %q, want %q", recs, want)
+	}
+
+	if code := a.main([]string{"recent", "--format", "yaml"}); code != 2 {
+		t.Errorf("--format yaml: exit %d, want 2", code)
+	}
+}
+
+func TestSlowAndCwd(t *testing.T) {
+	a, stdout, stderr := testApp(t,
+		store.Run{Cmd: "cargo build", Start: ago(time.Hour), Duration: 2 * time.Minute, Cwd: "/src/api"},
+		store.Run{Cmd: "cargo test", Start: ago(2 * time.Hour), Duration: 45 * time.Second, Cwd: "/src/api/crates/db"},
+		store.Run{Cmd: "npm ci", Start: ago(3 * time.Hour), Duration: 50 * time.Second, Cwd: "/src/web"},
+		store.Run{Cmd: "cargo check", Start: ago(4 * time.Hour), Duration: 5 * time.Second, Cwd: "/src/api"},
+	)
+	if code := a.main([]string{"slow", "--over", "40s", "--cwd", "/src/api", "--format", "csv"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	recs, err := csv.NewReader(stdout).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 3 || recs[1][5] != "cargo build" || recs[2][5] != "cargo test" {
+		t.Errorf("slow --over 40s --cwd /src/api = %q", recs)
+	}
+
+	stdout.Reset()
+	if code := a.main([]string{"top", "--cwd", "/src/web", "--format", "json"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	var groups []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &groups); err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 1 || groups[0]["key"] != "npm ci" || groups[0]["p95_ms"] != 50000.0 {
+		t.Errorf("top --cwd /src/web = %v", groups)
+	}
+}
+
+func TestStatsJSON(t *testing.T) {
+	a, stdout, stderr := testApp(t,
+		run("go test ./...", ago(time.Hour), 12*time.Second, 0),
+		run("go test ./...", ago(2*time.Hour), 8*time.Second, 1),
+		run("go test ./...", ago(40*24*time.Hour), 20*time.Second, 0),
+	)
+	if code := a.main([]string{"stats", "go test ./...", "--format", "json"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+	}
+	want := map[string]any{
+		"key": "go test ./...", "since": "30d", "runs": 2.0, "p50_ms": 10000.0,
+		"fail_rate": 0.5, "prev_runs": 1.0, "prev_p50_ms": 20000.0, "p50_change": -0.5,
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("stats JSON %s = %v, want %v", k, got[k], v)
+		}
+	}
+}
+
+func TestPrune(t *testing.T) {
+	day := 24 * time.Hour
+	a, stdout, stderr := testApp(t,
+		run("a", ago(100*day), time.Second, 0),
+		run("b", ago(95*day), time.Second, 0),
+		run("c", ago(10*day), time.Second, 0),
+	)
+	if code := a.main([]string{"prune", "--older-than", "90d", "--dry-run"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if got := stdout.String(); got != "would delete 2 runs started before 2026-01-15 12:00\n" {
+		t.Errorf("dry run printed %q", got)
+	}
+	stdout.Reset()
+	if code := a.main([]string{"prune", "--older-than", "90d"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if got := stdout.String(); !strings.HasPrefix(got, "deleted 2 runs") {
+		t.Errorf("prune printed %q", got)
+	}
+	stdout.Reset()
+	a.main([]string{"recent", "--format", "csv"})
+	if n := strings.Count(stdout.String(), "\n"); n != 2 {
+		t.Errorf("after prune recent has %d lines, want header + 1:\n%s", n, stdout)
+	}
+	if code := a.main([]string{"prune"}); code != 2 {
+		t.Errorf("prune without --older-than: exit %d, want 2", code)
 	}
 }

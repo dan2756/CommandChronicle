@@ -83,6 +83,20 @@ make build: 4 runs in the last 30d
 together: `npm run build` and `npm install` both count as `npm` (or as
 `npm run` and `npm install`).
 
+List every run that took more than 30 seconds, or clear out old history:
+
+```sh
+cmdtime slow --over 30s
+cmdtime prune --older-than 90d
+```
+
+Every report takes `--cwd DIR` to only look at runs in a directory (and
+below it) and `--format table|json|csv` for scripting:
+
+```sh
+cmdtime top --cwd . --format json
+```
+
 The database lives at `$XDG_DATA_HOME/cmdtime/cmdtime.db`
 (`~/.local/share/cmdtime/cmdtime.db` by default). Set `CMDTIME_DB` to use
 another file.

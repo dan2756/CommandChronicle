@@ -28,6 +28,8 @@ Commands:
   recent    show the most recent runs
   top       show the slowest commands
   stats     summarize one command: percentiles, failures, trend
+  slow      list runs that took longer than a threshold
+  prune     delete old runs
   version   print the version
 
 Run "cmdtime <command> -h" for the flags of each command.
@@ -56,6 +58,8 @@ var commands = map[string]command{
 	"recent": {recentUsage, (*app).cmdRecent},
 	"top":    {topUsage, (*app).cmdTop},
 	"stats":  {statsUsage, (*app).cmdStats},
+	"slow":   {slowUsage, (*app).cmdSlow},
+	"prune":  {pruneUsage, (*app).cmdPrune},
 }
 
 func main() {

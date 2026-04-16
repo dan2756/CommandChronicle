@@ -64,9 +64,18 @@ func TestQueryFilters(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTemp(t)
 	base := time.UnixMilli(1776108000000)
-	for i, cmd := range []string{"make build", "make test", "make  build", "make build"} {
-		r := Run{Cmd: cmd, Start: base.Add(time.Duration(i) * time.Hour), Duration: time.Second}
-		if _, err := s.Add(ctx, r); err != nil {
+	seed := []struct {
+		cmd, cwd string
+		d        time.Duration
+	}{
+		{"make build", "/src/app", time.Second},
+		{"make test", "/src/app/sub", 40 * time.Second},
+		{"make  build", "/src/app-old", 2 * time.Minute},
+		{"make build", "/src/web", 30 * time.Second},
+	}
+	for i, r := range seed {
+		run := Run{Cmd: r.cmd, Cwd: r.cwd, Start: base.Add(time.Duration(i) * time.Hour), Duration: r.d}
+		if _, err := s.Add(ctx, run); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -79,7 +88,12 @@ func TestQueryFilters(t *testing.T) {
 		{"key", Filter{Key: "make build"}, 3},
 		{"key is normalized", Filter{Key: " make   build"}, 3},
 		{"since", Filter{Since: base.Add(2 * time.Hour)}, 2},
+		{"before", Filter{Before: base.Add(2 * time.Hour)}, 2},
 		{"key and since", Filter{Key: "make build", Since: base.Add(time.Hour)}, 2},
+		{"cwd includes subdirectories", Filter{Cwd: "/src/app"}, 2},
+		{"cwd trailing slash", Filter{Cwd: "/src/app/"}, 2},
+		{"cwd root", Filter{Cwd: "/"}, 4},
+		{"min duration", Filter{MinDuration: 30 * time.Second}, 3},
 		{"no match", Filter{Key: "make"}, 0},
 	}
 	for _, tt := range tests {
@@ -88,8 +102,29 @@ func TestQueryFilters(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(runs) != tt.want {
-			t.Errorf("%s: got %d runs, want %d", tt.name, len(runs), tt.want)
+			t.Errorf("%s: Query got %d runs, want %d", tt.name, len(runs), tt.want)
 		}
+		if n, err := s.Count(ctx, tt.f); err != nil || n != tt.want {
+			t.Errorf("%s: Count = %d, %v; want %d", tt.name, n, err, tt.want)
+		}
+	}
+}
+
+func TestPrune(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	base := time.UnixMilli(1776108000000)
+	for i := 0; i < 5; i++ {
+		if _, err := s.Add(ctx, Run{Cmd: "sleep 1", Start: base.Add(time.Duration(i) * 24 * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := s.Prune(ctx, base.Add(3*24*time.Hour))
+	if err != nil || n != 3 {
+		t.Fatalf("Prune = %d, %v; want 3", n, err)
+	}
+	if left, _ := s.Count(ctx, Filter{}); left != 2 {
+		t.Errorf("%d runs left, want 2", left)
 	}
 }
 
