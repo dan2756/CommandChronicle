@@ -14,15 +14,18 @@ var (
 	zshHook string
 	//go:embed cmdtime.bash
 	bashHook string
+	//go:embed cmdtime.fish
+	fishHook string
 )
 
 var hooks = map[string]string{
 	"zsh":  zshHook,
 	"bash": bashHook,
+	"fish": fishHook,
 }
 
 // Shells lists the supported shells.
-var Shells = []string{"zsh", "bash"}
+var Shells = []string{"zsh", "bash", "fish"}
 
 // Options configures a generated hook.
 type Options struct {
@@ -31,7 +34,7 @@ type Options struct {
 	Min time.Duration
 }
 
-// Script returns the hook for shell, ready to be eval'd.
+// Script returns the hook for shell, ready to be eval'd (or sourced, in fish).
 func Script(shell string, opt Options) (string, error) {
 	src, ok := hooks[shell]
 	if !ok {

@@ -10,13 +10,14 @@ import (
 	"github.com/dan2756/cmdtime/internal/shell"
 )
 
-const initUsage = `Usage: cmdtime init <zsh|bash> [flags]
+const initUsage = `Usage: cmdtime init <zsh|bash|fish> [flags]
 
 Print the shell hook that records every interactive command. Records are
 written in the background, so the prompt is never slowed down.
 
-  zsh   add to ~/.zshrc:   eval "$(cmdtime init zsh)"
-  bash  add to ~/.bashrc:  eval "$(cmdtime init bash)"   (at the end)
+  zsh   add to ~/.zshrc:                  eval "$(cmdtime init zsh)"
+  bash  add to the end of ~/.bashrc:      eval "$(cmdtime init bash)"
+  fish  add to ~/.config/fish/config.fish: cmdtime init fish | source
 
 Flags:
   --min duration   don't record commands faster than this, e.g. 500ms or 5s
@@ -33,7 +34,7 @@ func (a *app) cmdInit(args []string) error {
 		return err
 	}
 	if len(pos) != 1 {
-		return usagef("want exactly one shell (zsh or bash)")
+		return usagef("want exactly one shell (zsh, bash or fish)")
 	}
 
 	opt := shell.Options{Min: defaultMin}

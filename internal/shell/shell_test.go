@@ -30,6 +30,12 @@ func TestScriptContainsHooks(t *testing.T) {
 			"command cmdtime record --cmd",
 			">/dev/null 2>&1 &)",
 		}},
+		{"fish", []string{
+			"set -g __cmdtime_min_ms 1500",
+			"function __cmdtime_postexec --on-event fish_postexec",
+			"--duration \"$CMD_DURATION\"ms",
+			"disown",
+		}},
 	}
 	for _, tt := range tests {
 		script, err := Script(tt.shell, Options{Min: 1500 * time.Millisecond})
@@ -69,6 +75,8 @@ func shellCmd(t *testing.T, shell string) []string {
 		return []string{path, "-f"}
 	case "bash":
 		return []string{path, "--norc", "--noprofile"}
+	case "fish":
+		return []string{path, "--no-config"}
 	}
 	t.Fatalf("no command line for %s", shell)
 	return nil
@@ -99,6 +107,9 @@ func TestHookRecords(t *testing.T) {
 	}
 	for _, sh := range Shells {
 		t.Run(sh, func(t *testing.T) {
+			if sh == "fish" {
+				t.Skip("fish only runs fish_postexec handlers when attached to a terminal")
+			}
 			argv := append(shellCmd(t, sh), "-i")
 			dir := t.TempDir()
 			logFile := filepath.Join(dir, "calls")

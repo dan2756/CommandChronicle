@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -258,5 +259,74 @@ func TestPrune(t *testing.T) {
 	}
 	if code := a.main([]string{"prune"}); code != 2 {
 		t.Errorf("prune without --older-than: exit %d, want 2", code)
+	}
+}
+
+func TestRecord(t *testing.T) {
+	a, stdout, stderr := testApp(t)
+	nowMS := testNow.UnixMilli()
+	ok := [][]string{
+		{"record", "--cmd", "make build", "--start", fmt.Sprint(nowMS - 90000), "--end", fmt.Sprint(nowMS - 30000), "--cwd", "/src"},
+		{"record", "--cmd", "fish thing", "--duration", "1500ms", "--exit", "1"},
+		{"record", "--cmd", "from start", "--start", fmt.Sprint(nowMS - 10000), "--duration", "2s"},
+		{"record", "--cmd", "ls", "--duration", "20ms", "--min", "1s"}, // skipped
+	}
+	for _, args := range ok {
+		if code := a.main(args); code != 0 {
+			t.Fatalf("%q: exit %d: %s", args, code, stderr)
+		}
+	}
+	if code := a.main([]string{"record", "--cmd", "x", "--start", "1", "--end", "2", "--duration", "1s"}); code != 2 {
+		t.Errorf("all of --start, --end and --duration: exit %d, want 2", code)
+	}
+	if code := a.main([]string{"record", "--cmd", "x", "--start", fmt.Sprint(nowMS), "--end", fmt.Sprint(nowMS - 1)}); code != 2 {
+		t.Errorf("--end before --start: exit %d, want 2", code)
+	}
+
+	a.main([]string{"recent", "--format", "csv"})
+	recs, err := csv.NewReader(stdout).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// id, started_at, duration_ms, exit, cwd, cmd; newest first
+	want := [][]string{
+		{"1", "2026-04-15T11:58:30.000Z", "60000", "0", "/src", "make build"},
+		{"3", "2026-04-15T11:59:50.000Z", "2000", "0", "", "from start"},
+		{"2", "2026-04-15T11:59:58.500Z", "1500", "1", "", "fish thing"},
+	}
+	if len(recs) != len(want)+1 {
+		t.Fatalf("recorded %d runs, want %d:\n%q", len(recs)-1, len(want), recs)
+	}
+	slices.SortFunc(recs[1:], func(x, y []string) int { return strings.Compare(x[1], y[1]) })
+	for i, w := range want {
+		got := recs[i+1]
+		if w[4] == "" {
+			got[4] = "" // the current directory, whatever it is
+		}
+		if fmt.Sprint(got) != fmt.Sprint(w) {
+			t.Errorf("run %d = %q, want %q", i, got, w)
+		}
+	}
+}
+
+func TestRun(t *testing.T) {
+	a, stdout, stderr := testApp(t)
+	if code := a.main([]string{"run", "--", "sh", "-c", "exit 3"}); code != 3 {
+		t.Fatalf("run: exit %d, want the command's 3 (stderr %q)", code, stderr)
+	}
+	if code := a.main([]string{"run", "cmdtime-test-no-such-command"}); code != 127 {
+		t.Errorf("run of a missing command: exit %d, want 127", code)
+	}
+	a.main([]string{"recent", "--format", "csv"})
+	recs, _ := csv.NewReader(stdout).ReadAll()
+	if len(recs) != 2 || recs[1][3] != "3" || recs[1][5] != "sh -c 'exit 3'" {
+		t.Errorf("recorded %q", recs)
+	}
+}
+
+func TestShellJoin(t *testing.T) {
+	got := shellJoin([]string{"git", "commit", "-m", "it's done", "", "a/b.go"})
+	if want := `git commit -m 'it'\''s done' '' a/b.go`; got != want {
+		t.Errorf("shellJoin = %s, want %s", got, want)
 	}
 }

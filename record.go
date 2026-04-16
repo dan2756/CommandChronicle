@@ -17,18 +17,21 @@ import (
 	"github.com/dan2756/cmdtime/internal/store"
 )
 
-const recordUsage = `Usage: cmdtime record --cmd CMD --start MS [flags]
+const recordUsage = `Usage: cmdtime record --cmd CMD (--start MS | --duration D) [flags]
 
 Store one finished command. The shell hooks call this in the background
-after every command; it is also handy for timing things by hand.
+after every command; it is also handy for timing things by hand. Give the
+start time, the duration, or both.
 
 Flags:
-  --cmd string    the command line (required)
-  --start int     start time in unix milliseconds (required)
-  --end int       end time in unix milliseconds (default: now)
-  --exit int      exit status of the command (default 0)
-  --cwd string    directory the command ran in (default: current directory)
-  --min duration  skip the run if it took less than this, e.g. 2s
+  --cmd string         the command line (required)
+  --start int          start time in unix milliseconds
+  --end int            end time in unix milliseconds (default: now, or
+                       --start plus --duration)
+  --duration duration  how long the command took, e.g. 1500ms or 2m
+  --exit int           exit status of the command (default 0)
+  --cwd string         directory the command ran in (default: current directory)
+  --min duration       skip the run if it took less than this, e.g. 2s
 `
 
 func (a *app) cmdRecord(args []string) error {
@@ -36,6 +39,7 @@ func (a *app) cmdRecord(args []string) error {
 	cmd := fs.String("cmd", "", "")
 	start := fs.Int64("start", 0, "")
 	end := fs.Int64("end", 0, "")
+	duration := fs.String("duration", "", "")
 	exit := fs.Int("exit", 0, "")
 	cwd := fs.String("cwd", "", "")
 	minDur := fs.String("min", "0", "")
@@ -48,28 +52,49 @@ func (a *app) cmdRecord(args []string) error {
 	if strings.TrimSpace(*cmd) == "" {
 		return usagef("--cmd is required")
 	}
-	if *start == 0 {
-		return usagef("--start is required")
-	}
-	if *start < 1e11 {
+	if *start != 0 && *start < 1e11 {
 		return usagef("--start %d looks like seconds; want unix milliseconds", *start)
-	}
-	endMS := *end
-	if endMS == 0 {
-		endMS = a.now().UnixMilli()
-	}
-	if endMS < *start {
-		return usagef("--end %d is before --start %d", endMS, *start)
 	}
 	threshold, err := dur.Parse(*minDur)
 	if err != nil {
 		return usagef("--min: %v", err)
 	}
 
+	var startMS, endMS int64
+	switch {
+	case *duration != "":
+		d, err := dur.Parse(*duration)
+		if err != nil {
+			return usagef("--duration: %v", err)
+		}
+		switch {
+		case *start != 0 && *end != 0:
+			return usagef("give two of --start, --end and --duration, not all three")
+		case *start != 0:
+			startMS, endMS = *start, *start+d.Milliseconds()
+		default:
+			endMS = *end
+			if endMS == 0 {
+				endMS = a.now().UnixMilli()
+			}
+			startMS = endMS - d.Milliseconds()
+		}
+	case *start != 0:
+		startMS, endMS = *start, *end
+		if endMS == 0 {
+			endMS = a.now().UnixMilli()
+		}
+		if endMS < startMS {
+			return usagef("--end %d is before --start %d", endMS, startMS)
+		}
+	default:
+		return usagef("--start or --duration is required")
+	}
+
 	run := store.Run{
 		Cmd:      *cmd,
-		Start:    time.UnixMilli(*start),
-		Duration: time.Duration(endMS-*start) * time.Millisecond,
+		Start:    time.UnixMilli(startMS),
+		Duration: time.Duration(endMS-startMS) * time.Millisecond,
 		Exit:     *exit,
 		Cwd:      *cwd,
 	}
