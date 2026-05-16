@@ -15,6 +15,16 @@ func TestKey(t *testing.T) {
 		{"make; make test", "make; make test", "make", "make"},
 		{"ls | wc -l", "ls | wc -l", "ls", "ls"},
 		{"cargo build && cargo test", "cargo build && cargo test", "cargo", "cargo build"},
+		{"FOO=1 make build", "FOO=1 make build", "make", "make build"},
+		{"sudo make install", "sudo make install", "make", "make install"},
+		{"CGO_ENABLED=0 sudo -E go build", "CGO_ENABLED=0 sudo -E go build", "go", "go build"},
+		{"time cargo build --release", "time cargo build --release", "cargo", "cargo build"},
+		{"env -i HOME=/tmp npm ci", "env -i HOME=/tmp npm ci", "npm", "npm ci"},
+		{"sudo", "sudo", "sudo", "sudo"},
+		{"A=1 B=2", "A=1 B=2", "A=1", "A=1 B=2"},
+		{"=x ls", "=x ls", "=x", "=x ls"},
+		{"1X=2 ls", "1X=2 ls", "1X=2", "1X=2 ls"},
+		{"git -c x=y status", "git -c x=y status", "git", "git -c"},
 		{"", "", "", ""},
 	}
 	for _, tt := range tests {

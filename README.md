@@ -138,7 +138,9 @@ command:
 | `word`      | `npm`                                    |
 
 Whitespace is always normalized. With `word` and `two-words`, a line such
-as `make build && make test` is grouped by its first command.
+as `make build && make test` is grouped by its first command, and leading
+variable assignments and wrappers like `sudo`, `time`, `env` or `nohup` are
+skipped: `CGO_ENABLED=0 sudo -E go build` counts as `go` / `go build`.
 
 `--cwd DIR` (on every report) keeps only runs in `DIR` or below it, so
 `cmdtime top --cwd .` shows the slowest commands of the current project.
