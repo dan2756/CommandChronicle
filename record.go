@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -103,6 +104,8 @@ func (a *app) cmdRecord(args []string) error {
 	}
 	if run.Cwd == "" {
 		run.Cwd, _ = os.Getwd()
+	} else if run.Cwd, err = filepath.Abs(run.Cwd); err != nil {
+		return fmt.Errorf("--cwd: %w", err)
 	}
 	return save(run)
 }
@@ -142,9 +145,14 @@ func (a *app) cmdRun(args []string) error {
 
 	// Ctrl-C and Ctrl-\ already reach the child through the terminal's
 	// process group; catch them so cmdtime survives to record the run.
-	// Signals aimed only at cmdtime are passed on.
+	// SIGTERM and SIGHUP aimed only at cmdtime are passed on. Signals that
+	// are ignored, as SIGHUP is under nohup, stay ignored for both.
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
+	for _, s := range []os.Signal{os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP} {
+		if !signal.Ignored(s) {
+			signal.Notify(sigs, s)
+		}
+	}
 	defer signal.Stop(sigs)
 
 	start := a.now()

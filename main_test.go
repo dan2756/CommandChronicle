@@ -6,6 +6,8 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,6 +18,15 @@ import (
 )
 
 var testNow = time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+
+// TestMain lets a test run the test binary as cmdtime itself, by setting
+// CMDTIME_TEST_MAIN=1.
+func TestMain(m *testing.M) {
+	if os.Getenv("CMDTIME_TEST_MAIN") == "1" {
+		main()
+	}
+	os.Exit(m.Run())
+}
 
 // testApp points CMDTIME_DB at a fresh database filled with runs and
 // returns an app whose clock is fixed at testNow.
@@ -321,6 +332,42 @@ func TestRun(t *testing.T) {
 	recs, _ := csv.NewReader(stdout).ReadAll()
 	if len(recs) != 2 || recs[1][3] != "3" || recs[1][5] != "sh -c 'exit 3'" {
 		t.Errorf("recorded %q", recs)
+	}
+}
+
+// Under nohup, SIGHUP is ignored. The command must inherit that, and
+// cmdtime must neither die of a hangup nor pass it on.
+func TestRunKeepsIgnoredSignals(t *testing.T) {
+	a, stdout, _ := testApp(t)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", `trap '' HUP; exec "$@"`, "sh",
+		exe, "run", "--", "sh", "-c", "kill -HUP $PPID $$; exit 0")
+	cmd.Env = append(os.Environ(), "CMDTIME_TEST_MAIN=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cmdtime run with SIGHUP ignored: %v\n%s", err, out)
+	}
+	a.main([]string{"recent", "--format", "csv"})
+	recs, _ := csv.NewReader(stdout).ReadAll()
+	if len(recs) != 2 || recs[1][3] != "0" {
+		t.Errorf("recorded %q", recs)
+	}
+}
+
+// A relative --cwd is taken from the current directory, as reports do.
+func TestRecordRelativeCwd(t *testing.T) {
+	a, stdout, stderr := testApp(t)
+	if code := a.main([]string{"record", "--cmd", "deploy", "--duration", "4m12s", "--cwd", "."}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if code := a.main([]string{"top", "--cwd", ".", "--format", "csv"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	recs, _ := csv.NewReader(stdout).ReadAll()
+	if len(recs) != 2 || recs[1][0] != "deploy" {
+		t.Errorf("top --cwd . after record --cwd . = %q", recs)
 	}
 }
 

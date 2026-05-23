@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,8 +24,9 @@ func TestScriptContainsHooks(t *testing.T) {
 		}},
 		{"bash", []string{
 			"__cmdtime_min_ms=1500",
-			"trap '__cmdtime_preexec' DEBUG",
+			`trap '__cmdtime_preexec "$_"' DEBUG`,
 			"PROMPT_COMMAND=__cmdtime_precmd",
+			`PROMPT_COMMAND=(__cmdtime_precmd "${PROMPT_COMMAND[@]}" __cmdtime_arm)`,
 			"__cmdtime_arm",
 			"case $BASH_COMMAND in __cmdtime_*)",
 			"command cmdtime record --cmd",
@@ -99,68 +101,128 @@ func TestScriptSyntax(t *testing.T) {
 	}
 }
 
-// TestHookRecords drives a real interactive shell with the hook loaded and a
-// stub cmdtime on PATH that logs how it was called.
+// TestHookRecords drives a real interactive shell with the hook loaded.
 func TestHookRecords(t *testing.T) {
-	if testing.Short() {
-		t.Skip("starts interactive shells")
-	}
 	for _, sh := range Shells {
 		t.Run(sh, func(t *testing.T) {
 			if sh == "fish" {
 				t.Skip("fish only runs fish_postexec handlers when attached to a terminal")
 			}
-			argv := append(shellCmd(t, sh), "-i")
-			dir := t.TempDir()
-			logFile := filepath.Join(dir, "calls")
-			stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + logFile + "'\n"
-			if err := os.WriteFile(filepath.Join(dir, "cmdtime"), []byte(stub), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			script, err := Script(sh, Options{Min: 0})
-			if err != nil {
-				t.Fatal(err)
-			}
-			hook := filepath.Join(dir, "hook")
-			if err := os.WriteFile(hook, []byte(script), 0o644); err != nil {
-				t.Fatal(err)
-			}
-
-			cmd := exec.Command(argv[0], argv[1:]...)
-			cmd.Dir = dir
-			cmd.Env = append(os.Environ(),
-				"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
-				"HISTFILE="+filepath.Join(dir, "history"),
-				"PROMPT_COMMAND=",
-			)
-			// An empty line in the middle must not record anything.
-			cmd.Stdin = strings.NewReader("source " + hook + "\necho hi | cat\n\nfalse\n")
-			// The shell exits with the status of the final "false".
-			out, err := cmd.CombinedOutput()
-			if _, ok := err.(*exec.ExitError); err != nil && !ok {
-				t.Fatalf("%s: %v\n%s", sh, err, out)
-			}
-
-			calls := waitForLines(t, logFile, 2)
-			if len(calls) != 2 {
-				t.Errorf("got %d recorder calls, want 2:\n%s", len(calls), strings.Join(calls, "\n"))
-			}
-			want := map[string]string{"echo hi | cat": "--exit 0", "false": "--exit 1"}
-			for _, c := range calls {
-				if strings.Contains(c, "__cmdtime") || strings.Contains(c, "source ") {
-					t.Errorf("recorded a hook command: %s", c)
-					continue
-				}
-				for name, exit := range want {
-					if strings.HasPrefix(c, "record --cmd "+name+" --start ") && strings.Contains(c, exit) {
-						delete(want, name)
-					}
-				}
-			}
-			for name := range want {
-				t.Errorf("%q not recorded as expected; calls:\n%s", name, strings.Join(calls, "\n"))
-			}
+			checkRecorded(t, runHook(t, sh, ""))
 		})
+	}
+}
+
+// Since bash 5.1, PROMPT_COMMAND may be an array whose elements all run.
+// The hook must still come first and last, or the prompt's own commands
+// are mistaken for the user's.
+func TestBashPromptCommandArray(t *testing.T) {
+	shellCmd(t, "bash")
+	out, err := exec.Command("bash", "-c", `((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 501)) && echo yes`).Output()
+	if err != nil || strings.TrimSpace(string(out)) != "yes" {
+		t.Skip("bash older than 5.1 has no PROMPT_COMMAND arrays")
+	}
+	checkRecorded(t, runHook(t, "bash", "PROMPT_COMMAND=(true 'echo prompt >/dev/null')\n"))
+}
+
+// The DEBUG trap runs before every command; it must leave $_ alone, or
+// "mkdir -p dir && cd $_" stops working.
+func TestBashKeepsLastArg(t *testing.T) {
+	shellCmd(t, "bash")
+	out, _ := typeWithHook(t, "bash", "", "echo hello world\necho \"last=[$_]\"\n")
+	if !strings.Contains(out, "last=[world]") {
+		t.Errorf("$_ changed by the hook; output:\n%s", out)
+	}
+}
+
+// A line that is not saved to the history (HISTCONTROL=ignorespace) must
+// not be recorded as the previous command, while a duplicate that
+// ignoredups leaves out still is recorded as the whole line.
+func TestBashUnsavedLines(t *testing.T) {
+	shellCmd(t, "bash")
+	_, logFile := typeWithHook(t, "bash", "HISTCONTROL=ignoreboth\n", "echo hi | cat\n echo hidden\necho hi | cat\n")
+	calls := waitForLines(t, logFile, 3)
+	var got []string
+	for _, c := range calls {
+		cmd, _, _ := strings.Cut(strings.TrimPrefix(c, "record --cmd "), " --start ")
+		got = append(got, cmd)
+	}
+	slices.Sort(got) // the recorders run in the background, in any order
+	if want := []string{"echo hi | cat", "echo hi | cat", "echo hidden"}; !slices.Equal(got, want) {
+		t.Errorf("recorded %q, want %q", got, want)
+	}
+}
+
+// runHook types a few commands into sh with the hook loaded after setup
+// and returns the logged recorder calls.
+func runHook(t *testing.T, sh, setup string) []string {
+	t.Helper()
+	// An empty line in the middle must not record anything.
+	_, logFile := typeWithHook(t, sh, setup, "echo hi | cat\n\nfalse\n")
+	return waitForLines(t, logFile, 2)
+}
+
+// typeWithHook starts sh interactively with a stub cmdtime on PATH that logs
+// how it was called, runs setup, loads the hook and types input. It returns
+// the shell's output and the file the recorder calls are logged to.
+func typeWithHook(t *testing.T, sh, setup, input string) (out, logFile string) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("starts interactive shells")
+	}
+	argv := append(shellCmd(t, sh), "-i")
+	dir := t.TempDir()
+	logFile = filepath.Join(dir, "calls")
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + logFile + "'\n"
+	if err := os.WriteFile(filepath.Join(dir, "cmdtime"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script, err := Script(sh, Options{Min: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := filepath.Join(dir, "hook")
+	if err := os.WriteFile(hook, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"HISTFILE="+filepath.Join(dir, "history"),
+		"PROMPT_COMMAND=",
+	)
+	cmd.Stdin = strings.NewReader(setup + "source " + hook + "\n" + input)
+	// The shell exits with the status of the last command typed.
+	b, err := cmd.CombinedOutput()
+	if _, ok := err.(*exec.ExitError); err != nil && !ok {
+		t.Fatalf("%s: %v\n%s", sh, err, b)
+	}
+	return string(b), logFile
+}
+
+// checkRecorded checks that exactly the commands typed by runHook were
+// recorded, each once, with the right exit status.
+func checkRecorded(t *testing.T, calls []string) {
+	t.Helper()
+	if len(calls) != 2 {
+		t.Errorf("got %d recorder calls, want 2:\n%s", len(calls), strings.Join(calls, "\n"))
+	}
+	want := map[string]string{"echo hi | cat": "--exit 0", "false": "--exit 1"}
+	for _, c := range calls {
+		if strings.Contains(c, "__cmdtime") || strings.Contains(c, "source ") {
+			t.Errorf("recorded a hook command: %s", c)
+			continue
+		}
+		for name, exit := range want {
+			if strings.HasPrefix(c, "record --cmd "+name+" --start ") && strings.Contains(c, exit) {
+				delete(want, name)
+			}
+		}
+	}
+	for name := range want {
+		t.Errorf("%q not recorded as expected; calls:\n%s", name, strings.Join(calls, "\n"))
 	}
 }
 

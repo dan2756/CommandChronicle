@@ -5,6 +5,10 @@ __cmdtime_min_ms={{.MinMS}}
 __cmdtime_armed=
 __cmdtime_start=
 __cmdtime_cmd=
+# Newest history entry when last looked at, and the $BASH_COMMAND that ran
+# it. __cmdtime_hist stays unset until the first prompt has read history.
+unset __cmdtime_hist
+__cmdtime_hist_bc=
 
 # Sets __cmdtime_t to the current unix time in milliseconds. Bash 5 has
 # EPOCHREALTIME; older versions (macOS /bin/bash) fall back to seconds.
@@ -18,17 +22,27 @@ __cmdtime_now() {
 }
 
 # DEBUG trap: runs before every simple command. Only the first command
-# after a prompt is timed; the prompt's own commands and completion
-# functions are ignored.
+# after a prompt is timed; the prompt's own commands, completion functions
+# and bind -x widgets are ignored. The trap passes "$_" so that bash sets
+# $_ back to it once the trap is done.
 __cmdtime_preexec() {
 	[[ -n $__cmdtime_armed ]] || return 0
-	[[ -n ${COMP_LINE-} || -n ${READLINE_LINE-} ]] && return 0
+	# READLINE_LINE is set, though maybe empty, while a bind -x widget runs.
+	[[ -n ${COMP_LINE-} || -n ${READLINE_LINE+x} ]] && return 0
 	case $BASH_COMMAND in __cmdtime_*) return 0 ;; esac
 	__cmdtime_armed=
 
+	# The whole command line comes from the history. If the newest entry is
+	# still the one seen before and a different command ran it, this line
+	# was not saved (HISTCONTROL=ignorespace, HISTIGNORE), so only the
+	# simple command about to run is known.
 	local line re='^[[:space:]]*[0-9]+[*[:space:]][[:space:]]*(.*)$'
 	line=$(HISTTIMEFORMAT= builtin history 1)
-	if [[ $line =~ $re ]]; then
+	if [[ $line != "${__cmdtime_hist-}" ]]; then
+		__cmdtime_hist=$line
+		__cmdtime_hist_bc=$BASH_COMMAND
+	fi
+	if [[ $BASH_COMMAND == "$__cmdtime_hist_bc" && $line =~ $re ]]; then
 		__cmdtime_cmd=${BASH_REMATCH[1]}
 	else
 		__cmdtime_cmd=$BASH_COMMAND
@@ -59,10 +73,20 @@ __cmdtime_precmd() {
 __cmdtime_arm() {
 	local ec=$?
 	__cmdtime_armed=1
+	if [[ -z ${__cmdtime_hist+x} ]]; then
+		__cmdtime_hist=$(HISTTIMEFORMAT= builtin history 1)
+	fi
 	return $ec
 }
 
-if [[ ${PROMPT_COMMAND-} != *__cmdtime_precmd* ]]; then
-	PROMPT_COMMAND=__cmdtime_precmd$'\n'${PROMPT_COMMAND:+$PROMPT_COMMAND$'\n'}__cmdtime_arm
-	trap '__cmdtime_preexec' DEBUG
+if [[ ${PROMPT_COMMAND[*]-} != *__cmdtime_precmd* ]]; then
+	if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 501)) &&
+		[[ $(declare -p PROMPT_COMMAND 2>/dev/null) == "declare -a"* ]]; then
+		# bash 5.1+ runs every element of an array PROMPT_COMMAND in turn
+		# (older versions only element 0); ours must still run first and last.
+		PROMPT_COMMAND=(__cmdtime_precmd "${PROMPT_COMMAND[@]}" __cmdtime_arm)
+	else
+		PROMPT_COMMAND=__cmdtime_precmd$'\n'${PROMPT_COMMAND:+$PROMPT_COMMAND$'\n'}__cmdtime_arm
+	fi
+	trap '__cmdtime_preexec "$_"' DEBUG
 fi

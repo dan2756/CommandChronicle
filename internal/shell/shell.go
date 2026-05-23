@@ -30,7 +30,7 @@ var Shells = []string{"zsh", "bash", "fish"}
 // Options configures a generated hook.
 type Options struct {
 	// Min is the shortest run worth recording. Faster commands are
-	// filtered in the shell itself, so they cost nothing.
+	// filtered in the shell itself, so cmdtime is not started for them.
 	Min time.Duration
 }
 

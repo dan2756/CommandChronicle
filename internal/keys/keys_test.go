@@ -25,6 +25,18 @@ func TestKey(t *testing.T) {
 		{"=x ls", "=x ls", "=x", "=x ls"},
 		{"1X=2 ls", "1X=2 ls", "1X=2", "1X=2 ls"},
 		{"git -c x=y status", "git -c x=y status", "git", "git -c"},
+		{"sudo -u postgres psql -c vacuum", "sudo -u postgres psql -c vacuum", "psql", "psql -c"},
+		{"sudo -Eu www-data php artisan", "sudo -Eu www-data php artisan", "php", "php artisan"},
+		{"sudo -uroot make install", "sudo -uroot make install", "make", "make install"},
+		{"sudo --user root make install", "sudo --user root make install", "make", "make install"},
+		{"env -u HOME make build", "env -u HOME make build", "make", "make build"},
+		{"time -f %e cargo build", "time -f %e cargo build", "cargo", "cargo build"},
+		{"make build;make test", "make build;make test", "make", "make build"},
+		{"ls|wc -l", "ls|wc -l", "ls", "ls"},
+		{"make build&&make test", "make build&&make test", "make", "make build"},
+		{"make 2>&1|tee log", "make 2>&1|tee log", "make", "make 2>&1"},
+		{"grep 'a|b' x", "grep 'a|b' x", "grep", "grep 'a|b'"},
+		{`echo a\;b`, `echo a\;b`, "echo", `echo a\;b`},
 		{"", "", "", ""},
 	}
 	for _, tt := range tests {

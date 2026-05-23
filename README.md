@@ -42,8 +42,8 @@ cmdtime init fish | source
 
 Open a new shell and keep working. Each command that runs for at least a
 second is handed to `cmdtime record` in the background. Faster commands
-(`ls`, `cd`, `git status`) are filtered inside the shell and never start a
-process. Change the threshold with `--min` or `CMDTIME_MIN`:
+(`ls`, `cd`, `git status`) are filtered inside the shell, so cmdtime is
+never started for them. Change the threshold with `--min` or `CMDTIME_MIN`:
 
 ```sh
 eval "$(cmdtime init zsh --min 3s)"
@@ -139,8 +139,9 @@ command:
 
 Whitespace is always normalized. With `word` and `two-words`, a line such
 as `make build && make test` is grouped by its first command, and leading
-variable assignments and wrappers like `sudo`, `time`, `env` or `nohup` are
-skipped: `CGO_ENABLED=0 sudo -E go build` counts as `go` / `go build`.
+variable assignments and wrappers like `sudo`, `time`, `env` or `nohup`
+are skipped along with their options: `CGO_ENABLED=0 sudo -E go build`
+counts as `go` / `go build`, and `sudo -u postgres psql` as `psql`.
 
 `--cwd DIR` (on every report) keeps only runs in `DIR` or below it, so
 `cmdtime top --cwd .` shows the slowest commands of the current project.
@@ -240,9 +241,18 @@ sqlite3 ~/.local/share/cmdtime/cmdtime.db 'SELECT cmd, duration_ms FROM runs ORD
 
 - Linux and macOS are supported.
 - macOS ships bash 3.2, which has no `EPOCHREALTIME`; there the bash hook
-  falls back to whole-second timestamps. bash 5 (e.g. from Homebrew), zsh
-  and fish record milliseconds.
+  falls back to whole-second timestamps from `date`, which it runs twice
+  per command. bash 5 (e.g. from Homebrew), zsh and fish record
+  milliseconds.
 - The bash hook installs its own `DEBUG` trap, replacing any existing one.
+  It works with `PROMPT_COMMAND` as a string or, in bash 5.1 and later, as
+  an array; load it after other tools that change `PROMPT_COMMAND`.
+- The bash hook reads each command line back with `history 1`, which
+  costs a subshell per command. A line the history leaves out
+  (`HISTCONTROL=ignorespace`, `HISTIGNORE`) is recorded as its first simple
+  command only, and a line that is just a subshell, such as
+  `(cd web && npm run build)`, is not recorded at all, because bash runs no
+  `DEBUG` trap for it.
 - The database path is the same on macOS (`~/.local/share/cmdtime`) unless
   `XDG_DATA_HOME` or `CMDTIME_DB` say otherwise.
 
