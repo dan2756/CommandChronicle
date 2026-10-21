@@ -145,6 +145,8 @@ counts as `go` / `go build`, and `sudo -u postgres psql` as `psql`.
 
 `--cwd DIR` (on every report) keeps only runs in `DIR` or below it, so
 `cmdtime top --cwd .` shows the slowest commands of the current project.
+A directory reached through a symlink matches the link and its target, which
+is how `top --cwd .` still finds runs the shell hook recorded under `$PWD`.
 
 `--format json` and `--format csv` print raw values (durations in
 milliseconds, times in UTC) for scripts and spreadsheets:

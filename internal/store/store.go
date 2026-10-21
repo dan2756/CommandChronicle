@@ -43,6 +43,9 @@ var migrations = []string{
 	);
 	CREATE INDEX runs_key_started ON runs (key, started_at);
 	CREATE INDEX runs_started ON runs (started_at);`,
+	// cwd_canon is cwd with symlinks resolved, so a filter matches a run
+	// whether the shell stored the logical path or the physical one.
+	`ALTER TABLE runs ADD COLUMN cwd_canon TEXT NOT NULL DEFAULT '';`,
 }
 
 // Store is an open cmdtime database.
@@ -147,8 +150,8 @@ func (s *Store) migrate(ctx context.Context) error {
 // Add stores r and returns its id.
 func (s *Store) Add(ctx context.Context, r Run) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO runs (key, cmd, started_at, duration_ms, exit_code, cwd) VALUES (?, ?, ?, ?, ?, ?)`,
-		keys.Normalize(r.Cmd), r.Cmd, r.Start.UnixMilli(), r.Duration.Milliseconds(), r.Exit, r.Cwd)
+		`INSERT INTO runs (key, cmd, started_at, duration_ms, exit_code, cwd, cwd_canon) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		keys.Normalize(r.Cmd), r.Cmd, r.Start.UnixMilli(), r.Duration.Milliseconds(), r.Exit, r.Cwd, canonicalCwd(r.Cwd))
 	if err != nil {
 		return 0, err
 	}
@@ -160,7 +163,7 @@ type Filter struct {
 	Key         string        // only runs of this command (compared after keys.Normalize)
 	Since       time.Time     // only runs started at or after this; zero means no bound
 	Before      time.Time     // only runs started before this; zero means no bound
-	Cwd         string        // only runs in this directory or below it
+	Cwd         string        // only runs in this directory or below it; symlinks match too
 	MinDuration time.Duration // only runs that took at least this long
 	Limit       int           // at most this many runs; 0 means no limit
 }
@@ -181,12 +184,11 @@ func (f Filter) where() (string, []any) {
 		conds = append(conds, `started_at < ?`)
 		args = append(args, f.Before.UnixMilli())
 	}
-	if dir := filepath.Clean(f.Cwd); f.Cwd != "" && dir != "/" {
-		// dir itself, or anything under dir/. '0' sorts right after '/',
-		// so the range covers exactly the paths starting with "dir/"
-		// without LIKE's wildcard escaping.
-		conds = append(conds, `(cwd = ? OR (cwd >= ? AND cwd < ?))`)
-		args = append(args, dir, dir+"/", dir+"0")
+	if f.Cwd != "" {
+		if cond, a := cwdCond(f.Cwd); cond != "" {
+			conds = append(conds, cond)
+			args = append(args, a...)
+		}
 	}
 	if f.MinDuration > 0 {
 		conds = append(conds, `duration_ms >= ?`)
@@ -196,6 +198,89 @@ func (f Filter) where() (string, []any) {
 		return "", nil
 	}
 	return ` WHERE ` + strings.Join(conds, ` AND `), args
+}
+
+// canonicalCwd resolves symlinks in cwd. The original path is kept for
+// display; this is the extra name queries match against. A path that
+// cannot be resolved (it was removed, or it never existed) is stored as
+// given, so the two names stay equal.
+func canonicalCwd(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return cwd
+	}
+	return resolved
+}
+
+// cwdCond matches f.Cwd, its symlink target, and $PWD when that names the
+// same directory. The shell hook records the logical $PWD, while --cwd .
+// is the physical working directory from getcwd; both have to hit.
+//
+// Each directory matches itself or anything under it. '0' sorts right after
+// '/', so the range covers exactly the paths starting with "dir/" without
+// LIKE's wildcard escaping. Root matches everything, so it adds no condition.
+func cwdCond(cwd string) (string, []any) {
+	dirs := cwdAliases(filepath.Clean(cwd))
+	for _, d := range dirs {
+		if d == "/" {
+			return "", nil
+		}
+	}
+	var parts []string
+	var args []any
+	for _, d := range dirs {
+		for _, col := range []string{"cwd", "cwd_canon"} {
+			parts = append(parts, `(`+col+` = ? OR (`+col+` >= ? AND `+col+` < ?))`)
+			args = append(args, d, d+"/", d+"0")
+		}
+	}
+	if len(parts) == 0 {
+		return "", nil
+	}
+	return "(" + strings.Join(parts, " OR ") + ")", args
+}
+
+// cwdAliases lists the names dir is also known by: itself, its symlink
+// target, and $PWD when that is the same directory.
+func cwdAliases(dir string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(p string) {
+		p = filepath.Clean(p)
+		if p == "" {
+			return
+		}
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	add(dir)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		add(resolved)
+	}
+	if pwd := os.Getenv("PWD"); filepath.IsAbs(pwd) {
+		if same, err := sameFile(pwd, dir); err == nil && same {
+			add(pwd)
+		}
+	}
+	return out
+}
+
+func sameFile(a, b string) (bool, error) {
+	ia, err := os.Stat(a)
+	if err != nil {
+		return false, err
+	}
+	ib, err := os.Stat(b)
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(ia, ib), nil
 }
 
 // Count returns how many runs match f, ignoring f.Limit.
