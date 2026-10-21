@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -198,5 +200,118 @@ func TestConcurrentWriters(t *testing.T) {
 	}
 	if len(runs) != writers*each {
 		t.Errorf("got %d runs, want %d", len(runs), writers*each)
+	}
+}
+
+func TestCwdSymlink(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(real, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sibling := real + "2"
+	if err := os.Mkdir(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	s, _ := openTemp(t)
+	start := time.UnixMilli(1776108000000)
+	for _, r := range []Run{
+		{Cmd: "make build", Cwd: link, Start: start, Duration: time.Second},
+		{Cmd: "go test", Cwd: filepath.Join(link, "sub"), Start: start, Duration: time.Second},
+		{Cmd: "npm ci", Cwd: sibling, Start: start, Duration: time.Second},
+	} {
+		if _, err := s.Add(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Query from somewhere else, so $PWD is not an alias of the project.
+	t.Setenv("PWD", base)
+
+	for _, dir := range []string{real, link, real + "/"} {
+		runs, err := s.Query(ctx, Filter{Cwd: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) != 2 {
+			t.Errorf("Query %s: %d runs, want the link and its subdir", dir, len(runs))
+		}
+		if n, err := s.Count(ctx, Filter{Cwd: dir, Key: "make build"}); err != nil || n != 1 {
+			t.Errorf("Count %s key: %d, %v; want 1", dir, n, err)
+		}
+	}
+	if runs, err := s.Query(ctx, Filter{Cwd: sibling}); err != nil || len(runs) != 1 || runs[0].Cmd != "npm ci" {
+		t.Errorf("sibling filter: %+v, %v", runs, err)
+	}
+}
+
+// A database written before cwd_canon existed still matches --cwd . :
+// the shell's logical $PWD is an alias of the physical working directory.
+func TestLegacyCwdSymlink(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "cmdtime.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(migrations[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE schema_version (version INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_version (version) VALUES (1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO runs (key, cmd, started_at, duration_ms, exit_code, cwd) VALUES ('make build', 'make build', 1, 1000, 0, ?)`, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	v, err := schemaVersion(ctx, s.db)
+	if err != nil || v != len(migrations) {
+		t.Fatalf("schema version = %d, %v; want %d", v, err, len(migrations))
+	}
+
+	t.Setenv("PWD", link)
+	runs, err := s.Query(ctx, Filter{Cwd: real})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].Cwd != link {
+		t.Fatalf("legacy row via physical --cwd: %+v", runs)
+	}
+	// Away from the directory, the physical path cannot invent the old
+	// logical name. The row is still there under the path that was stored.
+	t.Setenv("PWD", base)
+	if n, err := s.Count(ctx, Filter{Cwd: real}); err != nil || n != 0 {
+		t.Errorf("legacy row from elsewhere: count %d, %v; want 0", n, err)
+	}
+	if n, err := s.Count(ctx, Filter{Cwd: link}); err != nil || n != 1 {
+		t.Errorf("legacy row by its stored path: count %d, %v; want 1", n, err)
 	}
 }

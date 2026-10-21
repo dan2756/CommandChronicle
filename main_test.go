@@ -371,6 +371,51 @@ func TestRecordRelativeCwd(t *testing.T) {
 	}
 }
 
+func TestTopCwdSymlink(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(link, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	a, stdout, stderr := testApp(t)
+	// Hooks pass the shell's logical $PWD, not getcwd.
+	for _, args := range [][]string{
+		{"record", "--cmd", "make build", "--duration", "2s", "--cwd", link},
+		{"record", "--cmd", "go test", "--duration", "3s", "--cwd", sub},
+	} {
+		if code := a.main(args); code != 0 {
+			t.Fatalf("%q: exit %d: %s", args, code, stderr)
+		}
+	}
+	t.Setenv("PWD", base) // not the project; matching must not depend on it
+	if code := a.main([]string{"top", "--cwd", real, "--format", "csv"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if body := stdout.String(); !strings.Contains(body, "make build") || !strings.Contains(body, "go test") {
+		t.Fatalf("top --cwd physical path missed hook records:\n%s", body)
+	}
+
+	// --cwd . uses the physical directory. The shell's PWD is the link.
+	t.Chdir(link)
+	t.Setenv("PWD", link)
+	stdout.Reset()
+	if code := a.main([]string{"top", "--cwd", ".", "--format", "csv"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if body := stdout.String(); !strings.Contains(body, "make build") || !strings.Contains(body, "go test") {
+		t.Fatalf("top --cwd . missed hook records:\n%s", body)
+	}
+}
+
 func TestShellJoin(t *testing.T) {
 	got := shellJoin([]string{"git", "commit", "-m", "it's done", "", "a/b.go"})
 	if want := `git commit -m 'it'\''s done' '' a/b.go`; got != want {
