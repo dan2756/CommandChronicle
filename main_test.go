@@ -416,6 +416,43 @@ func TestTopCwdSymlink(t *testing.T) {
 	}
 }
 
+func TestSinceZeroIsEmpty(t *testing.T) {
+	a, stdout, stderr := testApp(t,
+		run("old", ago(30*24*time.Hour), time.Second, 0),
+		run("recent", ago(time.Hour), time.Second, 0),
+	)
+	if code := a.main([]string{"top", "--since", "0", "--format", "csv"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	recs, err := csv.NewReader(stdout).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("top --since 0 = %q, want only the header", recs)
+	}
+
+	stdout.Reset()
+	if code := a.main([]string{"top", "--since", "all", "--format", "csv"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	recs, err = csv.NewReader(stdout).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 3 {
+		t.Fatalf("top --since all = %q, want header + 2 runs", recs)
+	}
+
+	stderr.Reset()
+	if code := a.main([]string{"stats", "recent", "--since", "0s"}); code != 1 {
+		t.Fatalf("stats --since 0s: exit %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "the last 0s") || strings.Contains(stderr.String(), "all time") {
+		t.Fatalf("stats --since 0s stderr = %q", stderr)
+	}
+}
+
 func TestShellJoin(t *testing.T) {
 	got := shellJoin([]string{"git", "commit", "-m", "it's done", "", "a/b.go"})
 	if want := `git commit -m 'it'\''s done' '' a/b.go`; got != want {
