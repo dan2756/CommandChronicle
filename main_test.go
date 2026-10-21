@@ -290,6 +290,13 @@ func TestRecord(t *testing.T) {
 	if code := a.main([]string{"record", "--cmd", "x", "--start", "1", "--end", "2", "--duration", "1s"}); code != 2 {
 		t.Errorf("all of --start, --end and --duration: exit %d, want 2", code)
 	}
+	stderr.Reset()
+	if code := a.main([]string{"record", "--cmd", "x", "--end", "1700000000", "--duration", "5s"}); code != 2 {
+		t.Errorf("--end in seconds: exit %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "seconds") {
+		t.Errorf("--end in seconds stderr = %q", stderr)
+	}
 	if code := a.main([]string{"record", "--cmd", "x", "--start", fmt.Sprint(nowMS), "--end", fmt.Sprint(nowMS - 1)}); code != 2 {
 		t.Errorf("--end before --start: exit %d, want 2", code)
 	}

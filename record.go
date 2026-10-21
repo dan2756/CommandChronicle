@@ -56,6 +56,9 @@ func (a *app) cmdRecord(args []string) error {
 	if *start != 0 && *start < 1e11 {
 		return usagef("--start %d looks like seconds; want unix milliseconds", *start)
 	}
+	if *end != 0 && *end < 1e11 {
+		return usagef("--end %d looks like seconds; want unix milliseconds", *end)
+	}
 	threshold, err := dur.Parse(*minDur)
 	if err != nil {
 		return usagef("--min: %v", err)
