@@ -243,14 +243,17 @@ func truncate(s string, n int) string {
 }
 
 // window is a --since value: how far back a report looks.
+// all is set only for the literal "all". A parsed duration of zero is an
+// empty window ending at now, not all time.
 type window struct {
-	text string        // as given, for messages: "7d"
-	d    time.Duration // 0 means all time
+	text string
+	d    time.Duration
+	all  bool
 }
 
 func parseWindow(s string) (window, error) {
 	if s == "all" {
-		return window{text: s}, nil
+		return window{text: s, all: true}, nil
 	}
 	d, err := dur.Parse(s)
 	if err != nil {
@@ -262,14 +265,14 @@ func parseWindow(s string) (window, error) {
 // start returns the beginning of the window ending at now, or the zero
 // time for all time.
 func (w window) start(now time.Time) time.Time {
-	if w.d == 0 {
+	if w.all {
 		return time.Time{}
 	}
 	return now.Add(-w.d)
 }
 
 func (w window) String() string {
-	if w.d == 0 {
+	if w.all {
 		return "all time"
 	}
 	return "the last " + w.text
@@ -492,8 +495,12 @@ func (a *app) cmdStats(args []string) error {
 	if mode == keys.Cmd {
 		filter.Key = key
 	}
-	if win.d > 0 {
+	switch {
+	case win.all:
+	case win.d > 0:
 		filter.Since = now.Add(-2 * win.d)
+	default:
+		filter.Since = win.start(now)
 	}
 	runs, err := query(filter)
 	if err != nil {
