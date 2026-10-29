@@ -80,11 +80,17 @@ __cmdtime_arm() {
 }
 
 if [[ ${PROMPT_COMMAND[*]-} != *__cmdtime_precmd* ]]; then
-	if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 501)) &&
-		[[ $(declare -p PROMPT_COMMAND 2>/dev/null) == "declare -a"* ]]; then
-		# bash 5.1+ runs every element of an array PROMPT_COMMAND in turn
-		# (older versions only element 0); ours must still run first and last.
-		PROMPT_COMMAND=(__cmdtime_precmd "${PROMPT_COMMAND[@]}" __cmdtime_arm)
+	if ((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 501)); then
+		# bash 5.1+ runs every array element and shows each one the original
+		# $? and PIPESTATUS (older bash runs only element 0). A string is one
+		# script, so the hook's first command would collapse a pipeline to its
+		# overall status and a later prompt would miss a failing stage. Keep
+		# the user's string as a single element instead of joining it on.
+		if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == "declare -a"* ]]; then
+			PROMPT_COMMAND=(__cmdtime_precmd "${PROMPT_COMMAND[@]}" __cmdtime_arm)
+		else
+			PROMPT_COMMAND=(__cmdtime_precmd ${PROMPT_COMMAND:+"$PROMPT_COMMAND"} __cmdtime_arm)
+		fi
 	else
 		PROMPT_COMMAND=__cmdtime_precmd$'\n'${PROMPT_COMMAND:+$PROMPT_COMMAND$'\n'}__cmdtime_arm
 	fi

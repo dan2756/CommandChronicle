@@ -27,6 +27,7 @@ func TestScriptContainsHooks(t *testing.T) {
 			`trap '__cmdtime_preexec "$_"' DEBUG`,
 			"PROMPT_COMMAND=__cmdtime_precmd",
 			`PROMPT_COMMAND=(__cmdtime_precmd "${PROMPT_COMMAND[@]}" __cmdtime_arm)`,
+			`PROMPT_COMMAND=(__cmdtime_precmd ${PROMPT_COMMAND:+"$PROMPT_COMMAND"} __cmdtime_arm)`,
 			"__cmdtime_arm",
 			"case $BASH_COMMAND in __cmdtime_*)",
 			"command cmdtime record --cmd",
@@ -123,6 +124,46 @@ func TestBashPromptCommandArray(t *testing.T) {
 		t.Skip("bash older than 5.1 has no PROMPT_COMMAND arrays")
 	}
 	checkRecorded(t, runHook(t, "bash", "PROMPT_COMMAND=(true 'echo prompt >/dev/null')\n"))
+}
+
+// On bash 5.1+, a string PROMPT_COMMAND is one array element of its own.
+// Joining it into the hook's script would leave a later prompt command
+// with only the pipeline's overall status, so true | false | true looks
+// like a clean success.
+func TestBashStringPromptKeepsPipeStatus(t *testing.T) {
+	shellCmd(t, "bash")
+	ver, err := exec.Command("bash", "-c", `((BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] >= 501)) && echo yes`).Output()
+	if err != nil || strings.TrimSpace(string(ver)) != "yes" {
+		t.Skip("bash older than 5.1 has no PROMPT_COMMAND arrays")
+	}
+	out, logFile := typeWithHook(t, "bash",
+		"PROMPT_COMMAND='echo PIPE=${PIPESTATUS[*]}'\n",
+		"echo a | false\ntrue | false | true\n")
+	if !strings.Contains(out, "PIPE=0 1\n") || !strings.Contains(out, "PIPE=0 1 0\n") {
+		t.Errorf("prompt lost pipeline status:\n%s", out)
+	}
+	calls := waitForLines(t, logFile, 2)
+	var got []string
+	for _, c := range calls {
+		cmd, _, _ := strings.Cut(strings.TrimPrefix(c, "record --cmd "), " --start ")
+		got = append(got, cmd)
+		if strings.Contains(c, "PIPE=") || strings.Contains(c, "PROMPT_COMMAND") {
+			t.Errorf("recorded a prompt command: %s", c)
+		}
+	}
+	slices.Sort(got)
+	want := []string{"echo a | false", "true | false | true"}
+	if !slices.Equal(got, want) {
+		t.Errorf("recorded %q, want %q", got, want)
+	}
+	for _, c := range calls {
+		if strings.Contains(c, "echo a | false") && !strings.Contains(c, "--exit 1") {
+			t.Errorf("failing pipeline recorded with wrong status: %s", c)
+		}
+		if strings.Contains(c, "true | false | true") && !strings.Contains(c, "--exit 0") {
+			t.Errorf("pipeline recorded with wrong status: %s", c)
+		}
+	}
 }
 
 // The DEBUG trap runs before every command; it must leave $_ alone, or

@@ -249,6 +249,10 @@ sqlite3 ~/.local/share/cmdtime/cmdtime.db 'SELECT cmd, duration_ms FROM runs ORD
 - The bash hook installs its own `DEBUG` trap, replacing any existing one.
   It works with `PROMPT_COMMAND` as a string or, in bash 5.1 and later, as
   an array; load it after other tools that change `PROMPT_COMMAND`.
+  On bash 5.1 and later a string is kept as its own array element, so a
+  later prompt command still sees the whole `PIPESTATUS`: `true | false | true`
+  stays `0 1 0`. bash 3.2 runs the hook and the old prompt command as one
+  script, and a later command there sees only the overall status.
 - The bash hook reads each command line back with `history 1`, which
   costs a subshell per command. A line the history leaves out
   (`HISTCONTROL=ignorespace`, `HISTIGNORE`) is recorded as its first simple
