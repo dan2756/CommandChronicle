@@ -166,6 +166,17 @@ func TestBashStringPromptKeepsPipeStatus(t *testing.T) {
 	}
 }
 
+// REPLY is how a zsh function returns a string. The hook runs before every
+// prompt, so a value left by the previous command has to still be there.
+func TestZshKeepsReply(t *testing.T) {
+	shellCmd(t, "zsh")
+	out, _ := typeWithHook(t, "zsh", "",
+		"REPLY=kept\n[[ $REPLY == kept ]] && print -r -- REPLY_KEPT || print -r -- REPLY_CLOBBERED\n")
+	if !strings.Contains(out, "REPLY_KEPT") || strings.Contains(out, "REPLY_CLOBBERED") {
+		t.Errorf("hook overwrote REPLY:\n%s", out)
+	}
+}
+
 // The DEBUG trap runs before every command; it must leave $_ alone, or
 // "mkdir -p dir && cd $_" stops working.
 func TestBashKeepsLastArg(t *testing.T) {

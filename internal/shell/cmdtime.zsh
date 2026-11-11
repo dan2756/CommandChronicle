@@ -6,18 +6,20 @@ zmodload zsh/datetime
 typeset -g __cmdtime_min_ms={{.MinMS}}
 typeset -g __cmdtime_cmd=
 typeset -g __cmdtime_start=
+typeset -g __cmdtime_t=
 
-# Sets REPLY to the current unix time in milliseconds without forking.
+# Sets __cmdtime_t to the current unix time in milliseconds without forking.
+# REPLY is a zsh function's return value, and this runs around every command.
 __cmdtime_now() {
 	local -a t
 	t=($epochtime)
-	REPLY=$(( t[1] * 1000 + t[2] / 1000000 ))
+	__cmdtime_t=$(( t[1] * 1000 + t[2] / 1000000 ))
 }
 
 __cmdtime_preexec() {
 	__cmdtime_cmd=${1:-$3}
 	__cmdtime_now
-	__cmdtime_start=$REPLY
+	__cmdtime_start=$__cmdtime_t
 }
 
 __cmdtime_precmd() {
@@ -26,9 +28,9 @@ __cmdtime_precmd() {
 	local start=$__cmdtime_start
 	__cmdtime_start=
 	__cmdtime_now
-	if (( REPLY - start >= __cmdtime_min_ms )); then
+	if (( __cmdtime_t - start >= __cmdtime_min_ms )); then
 		# &! disowns the job, so the prompt never waits and no job notice is printed.
-		command cmdtime record --cmd "$__cmdtime_cmd" --start $start --end $REPLY \
+		command cmdtime record --cmd "$__cmdtime_cmd" --start $start --end $__cmdtime_t \
 			--exit $ec --cwd "$PWD" >/dev/null 2>&1 &!
 	fi
 }
