@@ -166,6 +166,26 @@ func TestBashStringPromptKeepsPipeStatus(t *testing.T) {
 	}
 }
 
+// setopt nounset must not abort zshrc on the precmd_functions assignment,
+// and the hook still has to record the next command.
+func TestZshNounset(t *testing.T) {
+	shellCmd(t, "zsh")
+	out, logFile := typeWithHook(t, "zsh", "setopt nounset err_exit\n", "echo hi | cat\n")
+	if strings.Contains(out, "parameter not set") {
+		t.Fatalf("nounset rejected the hook:\n%s", out)
+	}
+	calls := waitForLines(t, logFile, 1)
+	var got bool
+	for _, c := range calls {
+		if strings.Contains(c, "echo hi | cat") {
+			got = true
+		}
+	}
+	if !got {
+		t.Errorf("recorded %q, want the echo pipeline", calls)
+	}
+}
+
 // REPLY is how a zsh function returns a string. The hook runs before every
 // prompt, so a value left by the previous command has to still be there.
 func TestZshKeepsReply(t *testing.T) {
