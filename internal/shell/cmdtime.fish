@@ -9,8 +9,13 @@ function __cmdtime_postexec --on-event fish_postexec
     test -n "$cmd"; or return
     test -n "$CMD_DURATION"; and test "$CMD_DURATION" -ge $__cmdtime_min_ms; or return
     # fish only reports the duration; cmdtime works out the start time.
-    # Disowning keeps fish from printing a notice when the job ends.
+    # Disown only the recorder we just started. A bare `disown` removes the
+    # most recently used job, which is the user's own background job when
+    # cmdtime failed to start or has already exited.
+    set -l prev $last_pid
     command cmdtime record --cmd "$cmd" --duration "$CMD_DURATION"ms \
         --exit $ec --cwd "$PWD" >/dev/null 2>&1 &
-    disown
+    if test "$last_pid" != "$prev"
+        disown $last_pid 2>/dev/null
+    end
 end
