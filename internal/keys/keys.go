@@ -87,7 +87,9 @@ func isAssignment(f string) bool {
 }
 
 // skipPrefix drops leading variable assignments and wrapper commands (with
-// their options), unless nothing would be left.
+// their options), unless nothing would be left. "--" ends the current
+// wrapper's options, so "sudo -- -i" is the command "-i", while a wrapper
+// after it is still skipped: "env -- sudo -E make" is "make".
 func skipPrefix(fields []string) []string {
 	i, wrapper := 0, ""
 	for i < len(fields) {
@@ -97,6 +99,8 @@ func skipPrefix(fields []string) []string {
 		case isAssignment(f):
 		case isWrapper:
 			wrapper = f
+		case wrapper != "" && f == "--":
+			wrapper = ""
 		case wrapper != "" && strings.HasPrefix(f, "-"):
 			if takesValue(wrapper, f) {
 				i++
