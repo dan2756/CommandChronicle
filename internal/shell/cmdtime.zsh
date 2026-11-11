@@ -38,4 +38,9 @@ __cmdtime_precmd() {
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec __cmdtime_preexec
 # Run before any other precmd hook so $? is still the command's status.
-precmd_functions=(__cmdtime_precmd ${precmd_functions:#__cmdtime_precmd})
+# ${+precmd_functions} is 0 when the array is unset, so `setopt nounset` can source this.
+if (( ${+precmd_functions} )); then
+	precmd_functions=(__cmdtime_precmd ${precmd_functions:#__cmdtime_precmd})
+else
+	precmd_functions=(__cmdtime_precmd)
+fi
