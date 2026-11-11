@@ -37,7 +37,7 @@ func TestScriptContainsHooks(t *testing.T) {
 			"set -g __cmdtime_min_ms 1500",
 			"function __cmdtime_postexec --on-event fish_postexec",
 			"--duration \"$CMD_DURATION\"ms",
-			"disown",
+			"disown $last_pid",
 		}},
 	}
 	for _, tt := range tests {
@@ -183,6 +183,59 @@ func TestZshNounset(t *testing.T) {
 	}
 	if !got {
 		t.Errorf("recorded %q, want the echo pipeline", calls)
+	}
+}
+
+// A bare `disown` drops the most recently used job. When cmdtime cannot be
+// started, that job is the user's, so the hook must leave it alone.
+func TestFishDisownLeavesUserJob(t *testing.T) {
+	if _, err := exec.LookPath("script"); err != nil {
+		t.Skip("script not installed")
+	}
+	shellCmd(t, "fish")
+	dir := t.TempDir()
+	script, err := Script("fish", Options{Min: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := filepath.Join(dir, "hook.fish")
+	if err := os.WriteFile(hook, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// PATH has no cmdtime, so the recorder fails to start.
+	cmd := exec.Command("script", "-q", "-f", "-e", "-c",
+		"env PATH=/usr/bin:/bin fish --no-config", os.DevNull)
+	cmd.Stdin = strings.NewReader(strings.Join([]string{
+		"function fish_prompt; echo -n '> '; end",
+		"source " + hook,
+		"sleep 30 &",
+		"set -l pid $last_pid",
+		"if jobs | string match -q '*sleep*'",
+		"echo MARKER_STILL",
+		"else",
+		"echo MARKER_STOLEN",
+		"end",
+		"kill $pid 2>/dev/null",
+		"exit",
+		"exit",
+		"",
+	}, "\n"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	text := strings.ReplaceAll(string(out), "\r", "\n")
+	still, stolen := false, false
+	for _, line := range strings.Split(text, "\n") {
+		switch strings.TrimSpace(line) {
+		case "MARKER_STILL":
+			still = true
+		case "MARKER_STOLEN":
+			stolen = true
+		}
+	}
+	if !still || stolen {
+		t.Errorf("user background job was disowned:\n%s", text)
 	}
 }
 
